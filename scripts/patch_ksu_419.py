@@ -219,8 +219,7 @@ static int ksu_handle_event(struct fsnotify_group *group, struct inode *inode,
     if (mask & FS_ISDIR)
         return 0;
     if (file_name->len == 13 && !memcmp(file_name->name, "packages.list", 13)) {
-        pr_info("packages.list detected: %d
-", mask);
+        pr_info("packages.list detected: %d\\n", mask);
         ksu_defer_track_throne();
     }
     return 0;
@@ -278,12 +277,17 @@ def patch_seccomp():
 
 
 def main():
+    # 注意：这几个文件各自独立，缺任何一个都不应中断其余补丁。
+    # 早期版本在这里 return 1，导致只下载 pkg_observer.c 时
+    # patch_seccomp/patch_mountns/patch_pkgobs 全被跳过，误判成"补丁没生效"。
     if not TARGET.exists():
-        print(f"[ERROR] not found: {TARGET}")
-        return 1
-    ok = patch_seccomp()
+        print(f"  [SKIP] not found: {TARGET}")
+    patch_seccomp()
     patch_mountns()
     patch_pkgobs()
+
+    if not TARGET.exists():
+        return 0
 
     src = TARGET.read_text(encoding="utf-8")
 
