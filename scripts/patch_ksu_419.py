@@ -116,10 +116,65 @@ MARK_IOPOLL = "#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 1, 0)"
 MARK_REMAP = "#else // 4.19: remap_file_range / REMAP_FILE_DEDUP 都不存在"
 
 
+# --- 4. seccomp_cache.c：4.19 整个文件退化为空操作 ---
+# 该文件重新定义了 struct seccomp_filter 并访问 filter->cache.allow_native，
+# 但 4.19 的内核结构体只有 {usage, log, prev, prog} 四个成员 ——
+# seccomp 动作缓存（struct action_cache）是 5.9 才引入的。
+# 强行编译不是"缺个头文件"那么简单，而是内存布局错配，必须整体 stub 掉。
+SECCOMP_STUB = """// Linux 4.19: 内核还没有 seccomp 动作缓存。
+//
+// 原文件重新定义了 struct seccomp_filter 并访问 filter->cache.allow_native，
+// 但 4.19 的 kernel/seccomp.c 里该结构体只有四个成员：
+//     struct seccomp_filter {
+//         refcount_t usage;
+//         bool log;
+//         struct seccomp_filter *prev;
+//         struct bpf_prog *prog;
+//     };
+// struct action_cache 与 SECCOMP_ARCH_NATIVE_NR 都是 5.9+ 才有的。
+// 照原样编译会结构体重定义 + 越界访问，因此这里退化成空操作：
+// 4.19 没有缓存可清，也就不需要清。
+#include <linux/version.h>
+#include <linux/types.h>
+
+#include "infra/seccomp_cache.h"
+
+void ksu_seccomp_clear_cache(struct seccomp_filter *filter, int nr)
+{
+    (void)filter;
+    (void)nr;
+}
+
+void ksu_seccomp_allow_cache(struct seccomp_filter *filter, int nr)
+{
+    (void)filter;
+    (void)nr;
+}
+"""
+
+SECCOMP_TARGET = ROOT / "drivers" / "kernelsu" / "infra" / "seccomp_cache.c"
+MARK_SECCOMP = "4.19 没有缓存可清"
+
+
+def patch_seccomp():
+    if not SECCOMP_TARGET.exists():
+        print(f"  [WARN] seccomp_cache.c 不存在，跳过")
+        return True
+    cur = SECCOMP_TARGET.read_text(encoding="utf-8")
+    if MARK_SECCOMP in cur:
+        print("  [INFO] seccomp_cache.c 已是 4.19 stub")
+        return True
+    SECCOMP_TARGET.write_text(SECCOMP_STUB, encoding="utf-8")
+    print("  [OK]   seccomp_cache.c -> 4.19 空操作 stub")
+    return True
+
+
 def main():
     if not TARGET.exists():
         print(f"[ERROR] not found: {TARGET}")
         return 1
+    ok = patch_seccomp()
+
     src = TARGET.read_text(encoding="utf-8")
 
     # 幂等闸门：两个标记都在说明已经打过，直接退出。
