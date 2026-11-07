@@ -96,18 +96,35 @@ jobs:
       - name: Add Linux 4.19 compatibility shims
         run: |
           # KernelSU-Next 默认面向 5.10+，用到了一些 4.19 还没有的头文件。
-          # linux/pgtable.h 是 Linux 5.8 才从 asm/pgtable.h 拆出来的：
-          #   drivers/kernelsu/feature/sucompat.c:8:10: fatal error:
-          #   'linux/pgtable.h' file not found
           # 这里只加转发头，不改 KSU 源码。
-          cat > kernel/include/linux/pgtable.h <<'EOF'
-          #ifndef _LINUX_PGTABLE_H_COMPAT_419
-          #define _LINUX_PGTABLE_H_COMPAT_419
-          #include <asm/pgtable.h>
-          #endif
-          EOF
-          echo "--- shim: include/linux/pgtable.h ---"
-          cat kernel/include/linux/pgtable.h
+          #
+          #   linux/pgtable.h   5.8  才从 asm/pgtable.h 拆出
+          #   linux/minmax.h    5.15 才从 linux/kernel.h 拆出
+          #   linux/hex.h       5.18 才从 linux/kernel.h 拆出
+          #   linux/kstrtox.h   5.11 才从 linux/kernel.h 拆出
+          #   linux/unaligned.h 5.12 才从 asm/unaligned.h 拆出
+          #
+          # 4.19 里这些符号全都还在 linux/kernel.h / asm/unaligned.h 里，
+          # 转发过去即可，语义完全一致。
+
+          mkdir -p kernel/include/linux
+
+          write_shim() {
+            local name="$1" guard="$2" target="$3"
+            printf '%s\n' \
+              "#ifndef $guard" \
+              "#define $guard" \
+              "#include <$target>" \
+              "#endif" > "kernel/include/linux/$name"
+            echo "--- shim: include/linux/$name -> $target ---"
+            cat "kernel/include/linux/$name"
+          }
+
+          write_shim pgtable.h   _LINUX_PGTABLE_H_COMPAT_419   asm/pgtable.h
+          write_shim minmax.h    _LINUX_MINMAX_H_COMPAT_419    linux/kernel.h
+          write_shim hex.h       _LINUX_HEX_H_COMPAT_419       linux/kernel.h
+          write_shim kstrtox.h   _LINUX_KSTRTOX_H_COMPAT_419   linux/kernel.h
+          write_shim unaligned.h _LINUX_UNALIGNED_H_COMPAT_419 asm/unaligned.h
 
       - name: Patch KernelSU for Linux 4.19 fops
         run: |
