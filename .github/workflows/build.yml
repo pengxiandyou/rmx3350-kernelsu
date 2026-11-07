@@ -37,6 +37,32 @@ jobs:
           ln -sfn "$PWD/kernel/drivers" "$PWD/drivers"
           ls -d vendor kernel-4.19 drivers
 
+      - name: Repair dangling vendor symlinks
+        run: |
+          set +e
+          # OPPO 源码树里 drivers/base/kernelFwUpdate 是指向 vnd/vendor/... 的软链，
+          # 该布局只在 OPPO 内部构建机存在，CI 里必然断链 -> olddefconfig 报
+          # drivers/base/Kconfig:155: can't open file "drivers/base/kernelFwUpdate/Kconfig"
+          # 解法一：按它们期望的相对路径铺一份（../../../../vnd/vendor = 工作区的父目录）
+          mkdir -p "$GITHUB_WORKSPACE/../vnd"
+          ln -sfn "$GITHUB_WORKSPACE/vendor" "$GITHUB_WORKSPACE/../vnd/vendor"
+          # 解法二（兜底）：直接把实体文件复制进内核树，彻底不依赖软链解析
+          rm -rf kernel/drivers/base/kernelFwUpdate
+          cp -r vendor/oplus/kernel/touchpanel/kernelFwUpdate kernel/drivers/base/kernelFwUpdate
+          echo "--- kernelFwUpdate 内容 ---"
+          ls -l kernel/drivers/base/kernelFwUpdate
+          # 顺手列出全部断链，便于下一轮排查
+          echo "--- 扫描内核树断链软链 ---"
+          cd kernel
+          broken=0
+          while IFS= read -r l; do
+            if [ ! -e "$l" ]; then
+              echo "BROKEN: $l -> $(readlink "$l")"
+              broken=$((broken+1))
+            fi
+          done < <(find . -type l 2>/dev/null)
+          echo "broken symlink count: $broken"
+
       - name: Clone KernelSU-Next into drivers/kernelsu
         run: |
           git clone --depth 1 --branch v3.4.2 \
