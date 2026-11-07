@@ -113,6 +113,8 @@ PATCHES = [
 ]
 
 # 幂等标记：补丁落地后这两串必定唯一存在
+NL = chr(10)
+
 MARK_IOPOLL = "#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 1, 0)"
 MARK_REMAP = "#else // 4.19: remap_file_range / REMAP_FILE_DEDUP 都不存在"
 
@@ -465,6 +467,34 @@ def patch_selinux_419():
         print("  [SKIP] no sepolicy.c")
 
 
+MARK_DISPATCH_INC = "4.19 的 linux/sched.h 不间接引入 sched/signal.h 与 init_task.h"
+
+
+def patch_dispatch_includes():
+    """supercall/dispatch.c 用到 tasklist_lock 与 init_task。
+
+    5.x 的 linux/sched.h 会间接带上 sched/signal.h 与 init_task.h，4.19 不会，
+    于是报 use of undeclared identifier。这里补两条显式 include。
+    """
+    p = ROOT / "supercall" / "dispatch.c"
+    if not p.exists():
+        print("  [SKIP] no supercall/dispatch.c")
+        return
+    cur = p.read_text(encoding="utf-8", errors="replace")
+    if MARK_DISPATCH_INC in cur:
+        print("  [INFO] dispatch.c 已处理")
+        return
+    old = "#include <linux/capability.h>" + NL
+    if old not in cur:
+        print("  [WARN] dispatch.c: 未找到 include 锚点")
+        return
+    new = ("// " + MARK_DISPATCH_INC + NL
+           + "#include <linux/init_task.h>" + NL
+           + "#include <linux/sched/signal.h>" + NL
+           + old)
+    p.write_text(cur.replace(old, new, 1), encoding="utf-8")
+    print("  [OK]   dispatch.c: 补 init_task.h + sched/signal.h")
+
 def main():
     # 注意：这几个文件各自独立，缺任何一个都不应中断其余补丁。
     # 早期版本在这里 return 1，导致只下载 pkg_observer.c 时
@@ -476,6 +506,7 @@ def main():
     patch_pkgobs()
     patch_appprofile()
     patch_selinux_419()
+    patch_dispatch_includes()
     patch_common_api()
 
     if not TARGET.exists():
