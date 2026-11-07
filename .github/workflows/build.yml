@@ -165,6 +165,21 @@ jobs:
           grep -n "LINUX_VERSION_CODE\|ksu_wrapper_iopoll\|ksu_wrapper_remap_file_range" \
             kernel/drivers/kernelsu/infra/file_wrapper.c | head -30
 
+      - name: Patch KernelSU for Linux 4.19 missing symbols
+        run: |
+          # 第 22 轮编译全过、ld.lld 链接 vmlinux 时报的 10 个 undefined symbol。
+          # 每个符号的 4.19 等价实现见脚本头部注释。
+          python3 scripts/patch_missing_symbols.py kernel/drivers/kernelsu
+          echo "--- 打完补丁的关键片段 ---"
+          grep -nE "kern_unmount|ksu_selinux_cred|ksu_selinux_inode|strncpy_from_unsafe|__copy_from_user_inatomic|__copy_to_user_inatomic|probe_kernel_write|sched/task.h" \
+            kernel/drivers/kernelsu/feature/kernel_umount.c \
+            kernel/drivers/kernelsu/selinux/selinux.c \
+            kernel/drivers/kernelsu/infra/file_wrapper.c \
+            kernel/drivers/kernelsu/feature/sucompat.c \
+            kernel/drivers/kernelsu/runtime/ksud_integration.c \
+            kernel/drivers/kernelsu/hook/arm64/patch_memory.c \
+            kernel/drivers/kernelsu/policy/allowlist.c | head -40
+
       - name: Install build dependencies
         run: |
           sudo apt-get update -y
