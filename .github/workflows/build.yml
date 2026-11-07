@@ -65,10 +65,17 @@ jobs:
 
       - name: Clone KernelSU-Next into drivers/kernelsu
         run: |
+          # 注意：KernelSU-Next 的仓库根不是内核模块根，真正的 Kconfig/Makefile/Kbuild
+          # 在 kernel/ 子目录里。直接 clone 到 drivers/kernelsu 会导致
+          #   drivers/Kconfig:241: can't open file "drivers/kernelsu/Kconfig"
           git clone --depth 1 --branch v3.4.2 \
-            https://github.com/KernelSU-Next/KernelSU-Next.git \
-            kernel/drivers/kernelsu
-          ls kernel/drivers/kernelsu | head -20
+            https://github.com/KernelSU-Next/KernelSU-Next.git ksu_src
+          mkdir -p kernel/drivers/kernelsu
+          cp -r ksu_src/kernel/. kernel/drivers/kernelsu/
+          echo "--- drivers/kernelsu 内容 ---"
+          ls -la kernel/drivers/kernelsu | head -25
+          test -f kernel/drivers/kernelsu/Kconfig || { echo "::error::Kconfig missing"; exit 1; }
+          test -f kernel/drivers/kernelsu/Makefile || { echo "::error::Makefile missing"; exit 1; }
 
       - name: Inject KSU into Kconfig / Makefile
         run: |
