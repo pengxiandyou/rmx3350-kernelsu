@@ -69,7 +69,8 @@ def parse(path):
     h['header_raw'] = d[:hdr_size]
     return h, kernel, ramdisk, second, dtb, tail
 
-def build(h, kernel, ramdisk, second, dtb, tail, cmdline=None, bootid=True, pad_to=0):
+def build(h, kernel, ramdisk, second, dtb, tail, cmdline=None, bootid=True,
+          pad_to=0, avb_footer=False):
     ps = h['page_size'] or PAGE
     hdr = bytearray(h['header_raw'])
     if len(hdr) < 1660:
@@ -90,6 +91,7 @@ def build(h, kernel, ramdisk, second, dtb, tail, cmdline=None, bootid=True, pad_
             continue
         out += blob
         out += b'\x00' * (al(len(out)) - len(out))
+    content_end = len(out)
     # boot_id = SHA1(kernel+ramdisk+second+dtb)
     if bootid:
         import hashlib
@@ -99,7 +101,45 @@ def build(h, kernel, ramdisk, second, dtb, tail, cmdline=None, bootid=True, pad_
         out += tail
     if pad_to and len(out) < pad_to:
         out += b'\x00' * (pad_to - len(out))
+    # ---- OPPO/realme lk 的 AVB 结构（两个必需件，缺任一件 lk 直接判镜像非法、不开机）----
+    # 1) content_end 处必须有一段 1600 字节的 AvbVBMetaImageHeader 占位结构（magic "AVB0"）。
+    #    F.28 stock 与 RMX3357 的 NeoCore 里这 1600 字节完全相同
+    #    (sha256 e9192326...1a53c)，是 OPPO 的固定模板，实际验签走独立的 vbmeta 分区。
+    # 2) 分区最后 64 字节是 AvbFooter（magic "AVBf"），字段取
+    #    original_image_size = vbmeta_offset = content_end，vbmeta_size = 1600。
+    if avb_footer and pad_to and len(out) == pad_to and pad_to >= 64:
+        tmpl = _load_vbmeta_template()
+        need = content_end + len(tmpl)
+        if tmpl and need <= pad_to - 64:
+            out[content_end:need] = tmpl
+            footer = (b'AVBf'
+                      + struct.pack('>II', 1, 0)
+                      + struct.pack('>QQQ', content_end, content_end, len(tmpl))
+                      + b'\x00' * 28)
+            assert len(footer) == 64, len(footer)
+            out[-64:] = footer
+        else:
+            print("[avb]   !! 缺 vbmeta 模板或空间不足，footer 未写入")
     return bytes(out)
+
+
+_VBMETA_TMPL = None
+
+
+def _load_vbmeta_template():
+    """1600 字节 AVB0 占位结构，取自 F.28 原厂 boot。"""
+    global _VBMETA_TMPL
+    if _VBMETA_TMPL is None:
+        p = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         'avb_vbmeta_template.bin')
+        try:
+            _VBMETA_TMPL = open(p, 'rb').read()
+            if len(_VBMETA_TMPL) != 1600 or _VBMETA_TMPL[:4] != b'AVB0':
+                raise ValueError('bad template')
+        except Exception as e:
+            print(f"[avb]   模板读取失败 {p}: {e}")
+            _VBMETA_TMPL = b''
+    return _VBMETA_TMPL
 
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith('--')]
@@ -137,7 +177,13 @@ def main():
     if keep_tail:
         print(f"[tail]  保留 {len(keep_tail)} 字节尾部")
     pad = 0 if '--no-pad' in flags else 33554432
-    img = build(h, new_k, ramdisk, second, dtb, keep_tail, cmdline=cmd, pad_to=pad)
+    avb = pad != 0 and '--no-avb-footer' not in flags
+    img = build(h, new_k, ramdisk, second, dtb, keep_tail, cmdline=cmd,
+                pad_to=pad, avb_footer=avb)
+    if avb:
+        import struct as _s
+        off, vsz = _s.unpack('>QQ', img[-52:-36])
+        print(f"[avb]   末尾 AVB footer  vbmeta_offset={off} (0x{off:x})")
     _dir = os.path.dirname(os.path.abspath(out_path))
     if _dir:
         os.makedirs(_dir, exist_ok=True)
