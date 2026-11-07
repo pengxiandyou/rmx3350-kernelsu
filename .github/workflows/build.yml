@@ -1,0 +1,153 @@
+name: Build RMX3350 KernelSU Kernel
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
+      - name: Clone Realme AndroidT kernel source (4.19.191)
+        run: |
+          git clone --depth 1 \
+            https://github.com/realme-kernel-opensource/realme_X7max_GTneo_GTneo2T-AndroidT-kernel-source.git \
+            kernel
+          echo "--- kernel version ---"
+          head -6 kernel/Makefile
+
+      - name: Clone Realme AndroidT vendor source
+        run: |
+          git clone --depth 1 \
+            https://github.com/realme-kernel-opensource/realme_X7max_GTneo_GTneo2T-AndroidT-vendor-source.git \
+            vendor_repo
+          mv vendor_repo/vendor ./vendor
+          rm -rf vendor_repo
+          # 内核构建脚本按 $(srctree)/../vendor 与 $(srctree)/../kernel-4.19 找路径
+          ln -sfn "$PWD/kernel" "$PWD/kernel-4.19"
+          ln -sfn "$PWD/kernel/drivers" "$PWD/drivers"
+          ls -d vendor kernel-4.19 drivers
+
+      - name: Clone KernelSU-Next into drivers/kernelsu
+        run: |
+          git clone --depth 1 --branch v3.4.2 \
+            https://github.com/KernelSU-Next/KernelSU-Next.git \
+            kernel/drivers/kernelsu
+          ls kernel/drivers/kernelsu | head -20
+
+      - name: Inject KSU into Kconfig / Makefile
+        run: |
+          python3 scripts/inject_ksu.py kernel
+          echo "--- Kconfig tail ---"
+          tail -5 kernel/drivers/Kconfig
+          echo "--- Makefile tail ---"
+          tail -4 kernel/drivers/Makefile
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex libssl-dev libelf-dev pahole zip unzip \
+            binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi \
+            python3 git make
+
+      - name: Download AOSP Clang r416183b
+        run: |
+          mkdir -p "$HOME/clang"
+          URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-12.0.0_r1/clang-r416183b.tar.gz"
+          curl -fsSL --retry 3 --connect-timeout 40 "$URL" -o /tmp/clang.tar.gz
+          tar -xzf /tmp/clang.tar.gz -C "$HOME/clang"
+          "$HOME/clang/bin/clang" --version
+
+      - name: Merge config (stock F.28 + minimal KSU overlay)
+        run: |
+          cd kernel
+          mkdir -p out
+          ARCH=arm64 scripts/kconfig/merge_config.sh -m -O out \
+            ../configs/stock_f28.config \
+            ../configs/custom_rmx3350.config
+          # 确认关键项
+          grep -E "^CONFIG_KSU=|^CONFIG_KSU_MANUAL_HOOK=|MODULE_SIG" out/.config | sort
+
+      - name: Build Image.gz
+        run: |
+          cd kernel
+          export PATH="$HOME/clang/bin:$PATH"
+          make O=out ARCH=arm64 \
+            CC=clang CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
+            olddefconfig
+          make O=out ARCH=arm64 \
+            CC=clang CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
+            -j"$(nproc)" Image.gz
+
+      - name: Verify and enforce vermagic (+ suffix, matches F.28 stock)
+        run: |
+          cd kernel
+          ls -l out/arch/arm64/boot/Image.gz
+          python3 - <<'PY'
+          import gzip
+          TARGET = '4.19.191+ SMP preempt mod_unload modversions aarch64'
+          NOPLUS = '4.19.191 SMP preempt mod_unload modversions aarch64'
+          p = 'out/arch/arm64/boot/Image.gz'
+          raw = bytearray(gzip.decompress(open(p, 'rb').read()))
+          got = None
+          for cand in (TARGET, NOPLUS):
+              i = raw.find(cand.encode())
+              if i >= 0:
+                  got = (cand, i)
+                  break
+          print('image size      :', len(raw))
+          print('vermagic found  :', got)
+          if got is None:
+              raise SystemExit('vermagic string not found in Image - build is suspect')
+          val, off = got
+          if val == TARGET:
+              print('[=] vermagic already correct (tree was dirty -> + present)')
+          else:
+              # 用 + 版本覆盖，尾部原为 0x00 填充，空间足够
+              new = TARGET.encode()
+              raw[off:off + len(new)] = new
+              open(p, 'wb').write(gzip.compress(bytes(raw), 9, mtime=0))
+              print('[+] vermagic patched:', NOPLUS, '->', TARGET)
+              # 复验
+              chk = gzip.decompress(open(p, 'rb').read())
+              assert TARGET.encode() in chk, 'patch verification failed'
+              print('[+] re-verified OK')
+          PY
+
+      - name: Repack boot.img (F.28 stock as base)
+        run: |
+          python3 scripts/repack.py \
+            boot/f28_boot_stock.img \
+            kernel/out/arch/arm64/boot/Image.gz \
+            out/boot-rmx3350-f28-ksu.img \
+            --permissive
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p artifacts
+          cp kernel/out/arch/arm64/boot/Image.gz artifacts/Image.gz
+          cp out/boot-rmx3350-f28-ksu.img artifacts/
+          cp boot/f28_boot_stock.img artifacts/boot-rmx3350-f28-stock-rollback.img
+          ls -l artifacts/
+          md5sum artifacts/*
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rmx3350-f28-ksu
+          path: artifacts/
+          retention-days: 30

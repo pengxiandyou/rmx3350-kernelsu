@@ -1,0 +1,6 @@
+kernel/
+vendor/
+vendor_repo/
+out/
+*.log
+.work/
