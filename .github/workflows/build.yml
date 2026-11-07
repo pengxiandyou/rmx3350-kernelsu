@@ -63,6 +63,24 @@ jobs:
           done < <(find . -type l 2>/dev/null)
           echo "broken symlink count: $broken"
 
+      - name: Fix MTK cross-directory includes
+        run: |
+          # vendor 仓里的 oplus_sensor_feedback 会 include scp/rv/scp_helper.h，
+          # 后者再 include scp_feature_define.h，那里写的是 #include "scp.h"。
+          # driver 自己编译时靠 rv/Makefile 的 -I .../scp/include 能找到；
+          # 但从 sensor 目录进来时没有那条 -I，于是：
+          #   ../drivers/misc/mediatek/scp/rv/scp_feature_define.h:9:10:
+          #   fatal error: scp.h file not found
+          # 改成相对自身目录的路径，任何目录 include 都能解析。
+          f=kernel/drivers/misc/mediatek/scp/rv/scp_feature_define.h
+          if [ -f "$f" ]; then
+            sed -i 's|^#include "scp\.h"|#include "../include/scp.h"|' "$f"
+            echo "--- $f ---"
+            sed -n '7,12p' "$f"
+          else
+            echo "::warning::$f not found, skip"
+          fi
+
       - name: Clone KernelSU-Next into drivers/kernelsu
         run: |
           # 注意：KernelSU-Next 的仓库根不是内核模块根，真正的 Kconfig/Makefile/Kbuild
