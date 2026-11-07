@@ -155,6 +155,32 @@ void ksu_seccomp_allow_cache(struct seccomp_filter *filter, int nr)
 SECCOMP_TARGET = ROOT / "drivers" / "kernelsu" / "infra" / "seccomp_cache.c"
 MARK_SECCOMP = "4.19 没有缓存可清"
 
+# --- 5. su_mount_ns.c：4.19 没有 include/uapi/linux/mount.h ---
+# 那个头是 5.2 引入的（配 MOVE_MOUNT_* 那一批新 mount API 一起拆出来的），
+# 4.19 的 MS_* 常量全在 include/uapi/linux/fs.h —— 而该文件第 5 行
+# 已经 #include <linux/fs.h> 了。
+# 该文件实际只用到 MS_PRIVATE(1<<18) 和 MS_REC(16384)，两者在 4.19 都有。
+MOUNTNS_TARGET = ROOT / "drivers" / "kernelsu" / "infra" / "su_mount_ns.c"
+MOUNTNS_OLD = "#include <uapi/linux/mount.h>"
+MOUNTNS_NEW = ("// 4.19: 没有 include/uapi/linux/mount.h（5.2 才拆出来）。\n"
+               "// 本文件只用到 MS_PRIVATE / MS_REC，两者都在上面的 <linux/fs.h> 里。")
+MARK_MOUNTNS = "4.19: 没有 include/uapi/linux/mount.h"
+
+
+def patch_mountns():
+    if not MOUNTNS_TARGET.exists():
+        print("  [WARN] su_mount_ns.c 不存在，跳过")
+        return
+    cur = MOUNTNS_TARGET.read_text(encoding="utf-8")
+    if MARK_MOUNTNS in cur:
+        print("  [INFO] su_mount_ns.c 已处理")
+        return
+    if MOUNTNS_OLD not in cur:
+        print("  [WARN] su_mount_ns.c: 未找到 uapi/linux/mount.h include")
+        return
+    MOUNTNS_TARGET.write_text(cur.replace(MOUNTNS_OLD, MOUNTNS_NEW, 1), encoding="utf-8")
+    print("  [OK]   su_mount_ns.c: 去掉 uapi/linux/mount.h")
+
 
 def patch_seccomp():
     if not SECCOMP_TARGET.exists():
@@ -174,6 +200,7 @@ def main():
         print(f"[ERROR] not found: {TARGET}")
         return 1
     ok = patch_seccomp()
+    patch_mountns()
 
     src = TARGET.read_text(encoding="utf-8")
 
