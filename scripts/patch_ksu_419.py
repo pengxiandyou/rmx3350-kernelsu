@@ -470,6 +470,57 @@ def patch_selinux_419():
 MARK_DISPATCH_INC = "4.19 的 linux/sched.h 不间接引入 sched/signal.h 与 init_task.h"
 
 
+MARK_SELHIDE_419 = "KSU_SELINUX_HIDE_419_STUB"
+
+
+def patch_selinux_hide_419():
+    """feature/selinux_hide.c 依赖 selinux_state 的 status_page / status_lock / policy。
+
+    这三个成员在内核里的出现时间：
+      policy       5.1   引入（policydb 从 selinux_ss 里拆出来）
+      status_page  5.4   引入（/sys/fs/selinux/status 的实现）
+      status_lock  5.4   同上
+
+    realme 的 4.19 selinux_state 里一个都没有，且 ss 是 struct selinux_ss *（指针），
+    不是 5.x 的内嵌结构。复刻需要重写整个 policydb 访问层，成本远超收益。
+
+    selinux_hide 的接口只有 5 个无参 void 函数（见 selinux_hide.h），
+    4.19 上整体跳过，全部降级为空实现。
+    """
+    p = TARGET.parent.parent / "feature" / "selinux_hide.c"
+    if not p.exists():
+        print("  [SKIP] no feature/selinux_hide.c")
+        return
+    cur = p.read_text(encoding="utf-8", errors="replace")
+    if MARK_SELHIDE_419 in cur:
+        print("  [INFO] selinux_hide.c 已处理")
+        return
+
+    head_old = "#include " + chr(34) + "selinux_hide.h" + chr(34)
+    if head_old not in cur:
+        print("  [WARN] selinux_hide.c: 未找到 include 锚点")
+        return
+    head_new = ("// " + MARK_SELHIDE_419
+                + ": 4.19 没有 selinux_state.status_page/status_lock/policy，整体跳过" + NL
+                + "#include <linux/version.h>" + NL
+                + "#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 4, 0)" + NL
+                + head_old)
+    cur = cur.replace(head_old, head_new, 1)
+
+    tail = NL.join([
+        "",
+        "#else /* !(>= 5.4) */  " + MARK_SELHIDE_419,
+        "void ksu_selinux_hide_init() {}" ,
+        "void ksu_selinux_hide_exit() {}" ,
+        "void ksu_selinux_hide_drop_backup_if_unused() {}" ,
+        "void ksu_selinux_hide_handle_second_stage() {}" ,
+        "void ksu_selinux_hide_handle_post_fs_data() {}" ,
+        "#endif /* " + MARK_SELHIDE_419 + " */" ,
+        "",
+    ])
+    p.write_text(cur.rstrip() + NL + tail, encoding="utf-8")
+    print("  [OK]   selinux_hide.c: 4.19 整体降级为空实现")
+
 def patch_dispatch_includes():
     """supercall/dispatch.c 用到 tasklist_lock 与 init_task。
 
@@ -507,6 +558,7 @@ def main():
     patch_appprofile()
     patch_selinux_419()
     patch_dispatch_includes()
+    patch_selinux_hide_419()
     patch_common_api()
 
     if not TARGET.exists():
