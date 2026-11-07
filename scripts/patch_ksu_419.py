@@ -312,6 +312,37 @@ def patch_common_api():
     print(f"  [OK]   common api      TWA_RESUME x{n_twa}  fallthrough x{n_fall}")
 
 
+APPROFILE = ROOT / "drivers" / "kernelsu" / "policy" / "app_profile.c"
+
+APPROFILE_OLD = """    current->seccomp.filter = NULL;
+    atomic_set(&current->seccomp.filter_count, 0);"""
+
+APPROFILE_NEW = """    current->seccomp.filter = NULL;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)
+    // filter_count 是 5.9 引入的引用计数。4.19 的 struct seccomp 只有
+    // int mode + struct seccomp_filter *filter，计数活在 filter 自身，
+    // 把 filter 置 NULL 就已经放弃引用了，不需要额外原子操作。
+    atomic_set(&current->seccomp.filter_count, 0);
+#endif"""
+
+
+def patch_appprofile():
+    """app_profile.c 在 4.19 上访问了不存在的 seccomp.filter_count。"""
+    if not APPROFILE.exists():
+        print(f"  [SKIP] no app_profile.c")
+        return
+    s = APPROFILE.read_text(encoding="utf-8", errors="replace")
+    if "filter_count 是 5.9 引入的引用计数" in s:
+        print("  [INFO] app_profile.c 已处理")
+        return
+    if APPROFILE_OLD not in s:
+        print("  [WARN] app_profile.c: filter_count 片段未命中")
+        return
+    s = s.replace(APPROFILE_OLD, APPROFILE_NEW, 1)
+    APPROFILE.write_text(s, encoding="utf-8")
+    print("  [OK]   app_profile.c: seccomp.filter_count -> 5.9+ 守卫")
+
+
 def main():
     # 注意：这几个文件各自独立，缺任何一个都不应中断其余补丁。
     # 早期版本在这里 return 1，导致只下载 pkg_observer.c 时
@@ -321,6 +352,7 @@ def main():
     patch_seccomp()
     patch_mountns()
     patch_pkgobs()
+    patch_appprofile()
     patch_common_api()
 
     if not TARGET.exists():
