@@ -72,10 +72,18 @@ jobs:
             https://github.com/KernelSU-Next/KernelSU-Next.git ksu_src
           mkdir -p kernel/drivers/kernelsu
           cp -r ksu_src/kernel/. kernel/drivers/kernelsu/
+          # uapi/ 也在仓库根，但 kernel/policy/allowlist.h 用 #include "uapi/app_profile.h"，
+          # 经 Kbuild 的 -I$(KSU_KERNEL_DIR) 解析为 drivers/kernelsu/uapi/app_profile.h，
+          # 所以必须一并拷进来，否则：
+          #   policy/allowlist.h:6:10: fatal error: 'uapi/app_profile.h' file not found
+          cp -r ksu_src/uapi kernel/drivers/kernelsu/uapi
           echo "--- drivers/kernelsu 内容 ---"
           ls -la kernel/drivers/kernelsu | head -25
-          test -f kernel/drivers/kernelsu/Kconfig || { echo "::error::Kconfig missing"; exit 1; }
-          test -f kernel/drivers/kernelsu/Makefile || { echo "::error::Makefile missing"; exit 1; }
+          echo "--- uapi ---"
+          ls -l kernel/drivers/kernelsu/uapi
+          for f in Kconfig Makefile Kbuild uapi/app_profile.h uapi/supercall.h; do
+            test -e "kernel/drivers/kernelsu/$f" || { echo "::error::missing $f"; exit 1; }
+          done
 
       - name: Inject KSU into Kconfig / Makefile
         run: |
