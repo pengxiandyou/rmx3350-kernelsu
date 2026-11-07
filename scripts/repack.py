@@ -138,6 +138,9 @@ def main():
         print(f"[tail]  保留 {len(keep_tail)} 字节尾部")
     pad = 0 if '--no-pad' in flags else 33554432
     img = build(h, new_k, ramdisk, second, dtb, keep_tail, cmdline=cmd, pad_to=pad)
+    _dir = os.path.dirname(os.path.abspath(out_path))
+    if _dir:
+        os.makedirs(_dir, exist_ok=True)
     open(out_path, 'wb').write(img)
     print(f"[out]   {out_path}  {len(img)} bytes ({len(img)/1048576:.2f} MiB)")
     if len(img) > 33554432:

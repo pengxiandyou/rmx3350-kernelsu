@@ -279,11 +279,14 @@ jobs:
 
       - name: Repack boot.img (F.28 stock as base)
         run: |
+          mkdir -p out
           python3 scripts/repack.py \
             boot/f28_boot_stock.img \
             kernel/out/arch/arm64/boot/Image.gz \
             out/boot-rmx3350-f28-ksu.img \
             --permissive
+          ls -l out/
+          file out/boot-rmx3350-f28-ksu.img || true
 
       - name: Collect artifacts
         run: |
