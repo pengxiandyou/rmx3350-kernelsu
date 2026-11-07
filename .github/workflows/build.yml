@@ -109,6 +109,18 @@ jobs:
           echo "--- shim: include/linux/pgtable.h ---"
           cat kernel/include/linux/pgtable.h
 
+      - name: Patch KernelSU for Linux 4.19 fops
+        run: |
+          # file_wrapper.c 的 struct file_operations 拷贝逻辑用到了
+          # 4.19 内核里不存在的成员：
+          #   fops->iopoll            5.1 引入
+          #   fops->remap_file_range  4.20 引入（4.19 叫 dedupe_file_range）
+          #   REMAP_FILE_DEDUP        4.20 引入
+          python3 scripts/patch_ksu_419.py kernel
+          echo "--- 打完补丁的关键片段 ---"
+          grep -n "LINUX_VERSION_CODE\|ksu_wrapper_iopoll\|ksu_wrapper_remap_file_range" \
+            kernel/drivers/kernelsu/infra/file_wrapper.c | head -30
+
       - name: Install build dependencies
         run: |
           sudo apt-get update -y
