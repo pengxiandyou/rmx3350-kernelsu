@@ -183,22 +183,40 @@ def patch_path_mount():
 
 
 def patch_uaccess():
+    """Walk the whole KSU tree. `*_nofault` helpers are used in many files
+    (sucompat.c, ksud_integration.c, sulog/event.c, ...) -- patching only the
+    ones named in the first build log guarantees another round trip each time.
+    History: pkg_observer(TWA_RESUME) and scp.h both had to be redone as
+    whole-tree/whole-directory sweeps after single-file fixes missed copies."""
+    rules = [
+        ("strncpy_from_user_nofault(", "strncpy_from_unsafe("),
+        ("copy_from_user_nofault(", "__copy_from_user_inatomic("),
+        ("copy_to_user_nofault(", "__copy_to_user_inatomic("),
+        ("copy_to_kernel_nofault(", "probe_kernel_write("),
+    ]
     total = 0
-    total += sub_all(os.path.join(ROOT, "feature", "sucompat.c"),
-                     "strncpy_from_user_nofault(", "strncpy_from_unsafe(",
-                     "strncpy_from_unsafe")
-    total += sub_all(os.path.join(ROOT, "runtime", "ksud_integration.c"),
-                     "strncpy_from_user_nofault(", "strncpy_from_unsafe(",
-                     "strncpy_from_unsafe")
-    total += sub_all(os.path.join(ROOT, "runtime", "ksud_integration.c"),
-                     "copy_from_user_nofault(", "__copy_from_user_inatomic(",
-                     "__copy_from_user_inatomic")
-    total += sub_all(os.path.join(ROOT, "runtime", "ksud_integration.c"),
-                     "copy_to_user_nofault(", "__copy_to_user_inatomic(",
-                     "__copy_to_user_inatomic")
-    total += sub_all(os.path.join(ROOT, "hook", "arm64", "patch_memory.c"),
-                     "copy_to_kernel_nofault(", "probe_kernel_write(",
-                     "probe_kernel_write")
+    for dirpath, _dirnames, filenames in os.walk(ROOT):
+        for fn in filenames:
+            if not (fn.endswith(".c") or fn.endswith(".h")):
+                continue
+            p = os.path.join(dirpath, fn)
+            s = read(p)
+            hits = 0
+            for old, new in rules:
+                # Guard against double-prefixing: "__copy_from_user_inatomic("
+                # does not contain "copy_from_user_nofault(", so plain replace
+                # is safe here.
+                n = s.count(old)
+                if n:
+                    s = s.replace(old, new)
+                    hits += n
+            if hits:
+                write(p, s)
+                total += hits
+                rel = os.path.relpath(p, ROOT)
+                print("[OK  ] uaccess-nofault              x%-2d (%s)" % (hits, rel))
+    if total == 0:
+        print("[SKIP] uaccess-nofault              nothing to do")
     return total
 
 
