@@ -20,6 +20,7 @@ KernelSU-Next 默认面向 5.10+，用到了 4.19 内核里还不存在的 fops 
   - REMAP_FILE_DEDUP        4.20 引入
 """
 
+import re
 import sys
 from pathlib import Path
 
@@ -182,6 +183,87 @@ def patch_mountns():
     print("  [OK]   su_mount_ns.c: 去掉 uapi/linux/mount.h")
 
 
+
+# --- 6. pkg_observer.c：fsnotify_ops / task_work_add 的 API 差异 ---
+PKGOBS_TARGET = ROOT / "drivers" / "kernelsu" / "manager" / "pkg_observer.c"
+MARK_PKGOBS = "4.19 的 fsnotify_ops 只有 handle_event"
+
+PKGOBS_TW_OLD = """            if (!task_work_add(current, cb, TWA_RESUME))
+                return;"""
+
+PKGOBS_TW_NEW = """#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)
+            if (!task_work_add(current, cb, TWA_RESUME))
+#else
+            // 4.19: task_work_add 第三个参数是 bool notify
+            // （5.8 才改成 enum task_work_notify_mode，才有 TWA_RESUME）
+            if (!task_work_add(current, cb, true))
+#endif
+                return;"""
+
+PKGOBS_FN_RE = re.compile(
+    r"static const struct fsnotify_ops ksu_ops = \{[^}]*\};", re.S)
+
+PKGOBS_FN_NEW = """#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)
+// 4.19 的 fsnotify_ops 只有 handle_event，签名比 handle_inode_event 多三个参数：
+//   (group, inode, mask, data, data_type, file_name, cookie, iter_info)
+// handle_inode_event(mark, mask, inode, dir, file_name, cookie) 是 5.9 才引入的。
+static int ksu_handle_event(struct fsnotify_group *group, struct inode *inode,
+                            u32 mask, const void *data, int data_type,
+                            const struct qstr *file_name, u32 cookie,
+                            struct fsnotify_iter_info *iter_info)
+{
+    (void)group; (void)inode; (void)data; (void)data_type;
+    (void)cookie; (void)iter_info;
+    if (!file_name)
+        return 0;
+    if (mask & FS_ISDIR)
+        return 0;
+    if (file_name->len == 13 && !memcmp(file_name->name, "packages.list", 13)) {
+        pr_info("packages.list detected: %d
+", mask);
+        ksu_defer_track_throne();
+    }
+    return 0;
+}
+#endif
+
+static const struct fsnotify_ops ksu_ops = {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)
+    .handle_inode_event = ksu_handle_inode_event,
+#else
+    .handle_event = ksu_handle_event,
+#endif
+};"""
+
+
+def patch_pkgobs():
+    if not PKGOBS_TARGET.exists():
+        print("  [WARN] pkg_observer.c 不存在，跳过")
+        return
+    cur = PKGOBS_TARGET.read_text(encoding="utf-8")
+    if MARK_PKGOBS in cur:
+        print("  [INFO] pkg_observer.c 已处理")
+        return
+    changed = False
+    if PKGOBS_TW_OLD in cur:
+        cur = cur.replace(PKGOBS_TW_OLD, PKGOBS_TW_NEW, 1)
+        print("  [OK]   pkg_observer.c: TWA_RESUME -> 4.19 bool notify")
+        changed = True
+    else:
+        print("  [WARN] pkg_observer.c: TWA_RESUME 片段未命中")
+
+    m = PKGOBS_FN_RE.search(cur)
+    if m:
+        cur = cur[:m.start()] + PKGOBS_FN_NEW + cur[m.end():]
+        print("  [OK]   pkg_observer.c: fsnotify_ops -> 4.19 handle_event")
+        changed = True
+    else:
+        print("  [WARN] pkg_observer.c: fsnotify_ops 正则未命中")
+
+    if changed:
+        PKGOBS_TARGET.write_text(cur, encoding="utf-8")
+
+
 def patch_seccomp():
     if not SECCOMP_TARGET.exists():
         print(f"  [WARN] seccomp_cache.c 不存在，跳过")
@@ -201,6 +283,7 @@ def main():
         return 1
     ok = patch_seccomp()
     patch_mountns()
+    patch_pkgobs()
 
     src = TARGET.read_text(encoding="utf-8")
 
