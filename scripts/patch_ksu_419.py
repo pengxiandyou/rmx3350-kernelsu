@@ -476,7 +476,7 @@ def patch_dispatch_includes():
     5.x 的 linux/sched.h 会间接带上 sched/signal.h 与 init_task.h，4.19 不会，
     于是报 use of undeclared identifier。这里补两条显式 include。
     """
-    p = ROOT / "supercall" / "dispatch.c"
+    p = TARGET.parent.parent / "supercall" / "dispatch.c"
     if not p.exists():
         print("  [SKIP] no supercall/dispatch.c")
         return
