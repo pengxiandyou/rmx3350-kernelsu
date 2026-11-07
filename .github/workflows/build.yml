@@ -72,13 +72,22 @@ jobs:
           #   ../drivers/misc/mediatek/scp/rv/scp_feature_define.h:9:10:
           #   fatal error: scp.h file not found
           # 改成相对自身目录的路径，任何目录 include 都能解析。
-          f=kernel/drivers/misc/mediatek/scp/rv/scp_feature_define.h
-          if [ -f "$f" ]; then
-            sed -i 's|^#include "scp\.h"|#include "../include/scp.h"|' "$f"
-            echo "--- $f ---"
-            sed -n '7,12p' "$f"
+          # 逐个文件修会一直漏（scp_feature_define.h 之后还有 scp_helper.h），
+          # 直接对整个 scp 目录批量替换：凡是 #include "scp.h" 一律改相对路径。
+          base=kernel/drivers/misc/mediatek/scp
+          if [ -d "$base" ]; then
+            grep -rl '^#include "scp\.h"' "$base" 2>/dev/null | while read -r f; do
+              # 只有 rv/ 和 cm4/ 需要 ../include/，include/ 自己不用动
+              case "$f" in
+                */scp/include/*) continue ;;
+              esac
+              sed -i 's|^#include "scp\.h"|#include "../include/scp.h"|' "$f"
+              echo "  patched: $f"
+            done
+            echo "--- 剩余未处理的 #include \"scp.h\" ---"
+            grep -rn '^#include "scp\.h"' "$base" 2>/dev/null || echo "  (none)"
           else
-            echo "::warning::$f not found, skip"
+            echo "::warning::$base not found, skip"
           fi
 
       - name: Clone KernelSU-Next into drivers/kernelsu
