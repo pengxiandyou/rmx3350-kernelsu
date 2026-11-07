@@ -93,6 +93,22 @@ jobs:
           echo "--- Makefile tail ---"
           tail -4 kernel/drivers/Makefile
 
+      - name: Add Linux 4.19 compatibility shims
+        run: |
+          # KernelSU-Next 默认面向 5.10+，用到了一些 4.19 还没有的头文件。
+          # linux/pgtable.h 是 Linux 5.8 才从 asm/pgtable.h 拆出来的：
+          #   drivers/kernelsu/feature/sucompat.c:8:10: fatal error:
+          #   'linux/pgtable.h' file not found
+          # 这里只加转发头，不改 KSU 源码。
+          cat > kernel/include/linux/pgtable.h <<'EOF'
+          #ifndef _LINUX_PGTABLE_H_COMPAT_419
+          #define _LINUX_PGTABLE_H_COMPAT_419
+          #include <asm/pgtable.h>
+          #endif
+          EOF
+          echo "--- shim: include/linux/pgtable.h ---"
+          cat kernel/include/linux/pgtable.h
+
       - name: Install build dependencies
         run: |
           sudo apt-get update -y
