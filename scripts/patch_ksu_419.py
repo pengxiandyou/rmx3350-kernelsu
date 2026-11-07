@@ -383,6 +383,88 @@ def patch_appprofile():
     print(f"  [OK]   app_profile.c: {n} 处 4.19 适配")
 
 
+SELINUX_DIR = ROOT / "drivers" / "kernelsu" / "selinux"
+RULES_C = SELINUX_DIR / "rules.c"
+SEPOLICY_C = SELINUX_DIR / "sepolicy.c"
+
+MARK_RULES = "KSU_SELINUX_RULES_419_STUB"
+MARK_SEPOLICY = "KSU_SEPOLICY_419_STUB"
+
+RULES_TAIL = '''
+
+#else /* KSU_SELINUX_RULES_419_STUB */
+
+#include <linux/errno.h>
+#include <linux/types.h>
+
+/*
+ * 4.19 的 struct selinux_state 只有 enforcing / checkreqprot / initialized /
+ * policycap / avc / ss，没有 policy，也没有 policy_mutex。
+ *
+ * 5.1 才把 struct selinux_policy 从 struct selinux_ss 里拆出来。KSU 的动态
+ * sepolicy 注入（dup 整个 policydb → 改 avtab → 原子替换 selinux_state.policy）
+ * 完全建立在那个新布局之上。要在 4.19 复刻同一套，得重写整个 policydb 访问层，
+ * 还要处理 android_netlink_route 之类 Android 私有字段，风险远大于收益。
+ *
+ * 本内核以 androidboot.selinux=permissive 启动，SELinux 不拦截任何操作，
+ * 所以这里降级为空实现：不注入规则，su 照常可用。代价只是 su 进程缺少定制
+ * domain 的显式 allow 规则 —— permissive 下没有实际影响。
+ */
+void apply_kernelsu_rules(void)
+{
+}
+
+int handle_sepolicy(void __user *user_data, u64 data_len)
+{
+	(void)user_data;
+	(void)data_len;
+	return -EOPNOTSUPP;
+}
+
+#endif /* KSU_SELINUX_RULES_419_STUB */
+'''
+
+
+def patch_selinux_419():
+    """4.19: selinux_state 没有 policy/policy_mutex，整层 sepolicy 注入降级。"""
+    if RULES_C.exists():
+        s = RULES_C.read_text(encoding="utf-8", errors="replace")
+        if MARK_RULES in s:
+            print("  [INFO] rules.c 已处理")
+        else:
+            head = '#include "linux/rcupdate.h"'
+            if head in s:
+                s = s.replace(
+                    head,
+                    '#include <linux/version.h>\n\n'
+                    '/* KSU_SELINUX_RULES_419_STUB: 说明见文件末尾 */\n'
+                    '#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 1, 0)\n\n'
+                    + head,
+                    1)
+                s = s + RULES_TAIL
+                RULES_C.write_text(s, encoding="utf-8")
+                print("  [OK]   rules.c: 4.19 降级为空实现")
+            else:
+                print("  [WARN] rules.c: 头部锚点未命中")
+    else:
+        print("  [SKIP] no rules.c")
+
+    if SEPOLICY_C.exists():
+        s2 = SEPOLICY_C.read_text(encoding="utf-8", errors="replace")
+        if MARK_SEPOLICY in s2:
+            print("  [INFO] sepolicy.c 已处理")
+        else:
+            s2 = ("/* KSU_SEPOLICY_419_STUB: struct selinux_policy 4.19 不存在，整体不编译 */\n"
+                  "#include <linux/version.h>\n"
+                  "#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 1, 0)\n"
+                  + s2 +
+                  "\n#endif /* KSU_SEPOLICY_419_STUB */\n")
+            SEPOLICY_C.write_text(s2, encoding="utf-8")
+            print("  [OK]   sepolicy.c: 4.19 整体跳过")
+    else:
+        print("  [SKIP] no sepolicy.c")
+
+
 def main():
     # 注意：这几个文件各自独立，缺任何一个都不应中断其余补丁。
     # 早期版本在这里 return 1，导致只下载 pkg_observer.c 时
@@ -393,6 +475,7 @@ def main():
     patch_mountns()
     patch_pkgobs()
     patch_appprofile()
+    patch_selinux_419()
     patch_common_api()
 
     if not TARGET.exists():
