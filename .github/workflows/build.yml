@@ -115,11 +115,24 @@ jobs:
         run: |
           cd kernel
           export PATH="$HOME/clang/bin:$PATH"
+          # MTK/OPPO 的 sched_assist 等代码用 void foo() 旧式定义，
+          # 在内核 -Werror 下会直接失败：
+          #   sched_assist_slide_v1.c:129: error: this old-style function definition
+          #   is not preceded by a prototype [-Werror,-Wstrict-prototypes]
+          # 加 KCFLAGS 抑制，不改源码（保持与出厂二进制一致的行为）
+          KCFLAGS="-Wno-strict-prototypes -Wno-error=strict-prototypes \
+                   -Wno-error=unused-but-set-variable -Wno-error=address-of-packed-member \
+                   -Wno-error=incompatible-pointer-types -Wno-error=implicit-function-declaration \
+                   -Wno-error=format" \
           make O=out ARCH=arm64 \
             CC=clang CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
             LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
             olddefconfig
+          KCFLAGS="-Wno-strict-prototypes -Wno-error=strict-prototypes \
+                   -Wno-error=unused-but-set-variable -Wno-error=address-of-packed-member \
+                   -Wno-error=incompatible-pointer-types -Wno-error=implicit-function-declaration \
+                   -Wno-error=format" \
           make O=out ARCH=arm64 \
             CC=clang CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
