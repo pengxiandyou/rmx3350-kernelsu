@@ -276,6 +276,42 @@ def patch_seccomp():
     return True
 
 
+KSU_DIR = ROOT / "drivers" / "kernelsu"
+
+
+def patch_common_api():
+    """4.19 通用 API 兜底。
+
+    按文件名逐个修会一直漏 —— TWA_RESUME 实际散落在 pkg_observer / allowlist /
+    supercall / susfs_supercall 四个文件里。这里对整棵树做统一替换：
+
+      task_work_add(task, cb, TWA_RESUME)  ->  task_work_add(task, cb, true)
+          TWA_RESUME 是 5.8 才有的 enum task_work_notify_mode；
+          4.19 的第三参是 bool notify，true 即"回调在返回用户态前执行"。
+
+      fallthrough;  ->  /* fallthrough */
+          fallthrough 语句 5.4 引入，4.19 只认注释形式。
+    """
+    if not KSU_DIR.exists():
+        print(f"  [SKIP] no kernelsu dir: {KSU_DIR}")
+        return
+    n_twa = n_fall = 0
+    for f in sorted(KSU_DIR.rglob("*.c")) + sorted(KSU_DIR.rglob("*.h")):
+        s = f.read_text(encoding="utf-8", errors="replace")
+        o = s
+        c = s.count(", TWA_RESUME)")
+        if c:
+            s = s.replace(", TWA_RESUME)", ", true)")
+            n_twa += c
+        c2 = s.count("fallthrough;")
+        if c2:
+            s = s.replace("fallthrough;", "/* fallthrough */")
+            n_fall += c2
+        if s != o:
+            f.write_text(s, encoding="utf-8")
+    print(f"  [OK]   common api      TWA_RESUME x{n_twa}  fallthrough x{n_fall}")
+
+
 def main():
     # 注意：这几个文件各自独立，缺任何一个都不应中断其余补丁。
     # 早期版本在这里 return 1，导致只下载 pkg_observer.c 时
@@ -285,6 +321,7 @@ def main():
     patch_seccomp()
     patch_mountns()
     patch_pkgobs()
+    patch_common_api()
 
     if not TARGET.exists():
         return 0
