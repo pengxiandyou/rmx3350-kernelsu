@@ -326,21 +326,61 @@ APPROFILE_NEW = """    current->seccomp.filter = NULL;
 #endif"""
 
 
+APPROFILE_SECCOMP_OLD = """void seccomp_filter_release(struct task_struct *tsk);"""
+
+APPROFILE_SECCOMP_NEW = """#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)
+void seccomp_filter_release(struct task_struct *tsk);
+#endif"""
+
+APPROFILE_DIS_OLD = "static void disable_seccomp(void)\n{"
+
+APPROFILE_DIS_NEW = """// 4.19: struct seccomp 只有 int mode + struct seccomp_filter *filter，
+// 没有 filter_count；seccomp_filter_release() 是 5.9 才加的。
+// 这里清 filter 只能手动减引用，而 4.19 的 __put_seccomp_filter 是 static、
+// 设备又 KALLSYMS_ALL=n 查不到符号，减错了就是内核直接崩。
+// 所以 4.19 整体跳过 —— 只降低 app_profile 的隐藏深度，不影响 root 本身。
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)
+static void disable_seccomp(void)
+{"""
+
+APPROFILE_DIS_TAIL_OLD = """    seccomp_filter_release(fake);
+    kfree(fake);
+}"""
+
+APPROFILE_DIS_TAIL_NEW = """    seccomp_filter_release(fake);
+    kfree(fake);
+}
+#else
+static void disable_seccomp(void) {}
+#endif"""
+
+
 def patch_appprofile():
-    """app_profile.c 在 4.19 上访问了不存在的 seccomp.filter_count。"""
+    """app_profile.c 在 4.19 上访问了不存在的 seccomp.filter_count，
+    并且依赖 5.9 才有的 seccomp_filter_release()。"""
     if not APPROFILE.exists():
         print(f"  [SKIP] no app_profile.c")
         return
     s = APPROFILE.read_text(encoding="utf-8", errors="replace")
-    if "filter_count 是 5.9 引入的引用计数" in s:
+    if "只降低 app_profile 的隐藏深度" in s:
         print("  [INFO] app_profile.c 已处理")
         return
-    if APPROFILE_OLD not in s:
-        print("  [WARN] app_profile.c: filter_count 片段未命中")
-        return
-    s = s.replace(APPROFILE_OLD, APPROFILE_NEW, 1)
+    n = 0
+    if APPROFILE_OLD in s:
+        s = s.replace(APPROFILE_OLD, APPROFILE_NEW, 1)
+        n += 1
+    # 声明也一起收进版本守卫，避免 4.19 下出现"有声明无定义"
+    if APPROFILE_SECCOMP_OLD in s:
+        s = s.replace(APPROFILE_SECCOMP_OLD, APPROFILE_SECCOMP_NEW, 1)
+        n += 1
+    if APPROFILE_DIS_OLD in s:
+        s = s.replace(APPROFILE_DIS_OLD, APPROFILE_DIS_NEW, 1)
+        n += 1
+    if APPROFILE_DIS_TAIL_OLD in s:
+        s = s.replace(APPROFILE_DIS_TAIL_OLD, APPROFILE_DIS_TAIL_NEW, 1)
+        n += 1
     APPROFILE.write_text(s, encoding="utf-8")
-    print("  [OK]   app_profile.c: seccomp.filter_count -> 5.9+ 守卫")
+    print(f"  [OK]   app_profile.c: {n} 处 4.19 适配")
 
 
 def main():
