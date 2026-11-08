@@ -180,6 +180,12 @@ jobs:
             kernel/drivers/kernelsu/hook/arm64/patch_memory.c \
             kernel/drivers/kernelsu/policy/allowlist.c | head -40
 
+      - name: EXPERIMENT ignore vendor .ko CRC mismatch
+        run: |
+          python3 scripts/patch_module_crc_test.py kernel
+          echo "--- confirm ---"
+          grep -n "KSU_TEST_IGNORE_CRC_419" -A4 -B2 kernel/kernel/module.c
+
       - name: Install build dependencies
         run: |
           sudo apt-get update -y
