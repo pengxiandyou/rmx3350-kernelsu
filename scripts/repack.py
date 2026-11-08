@@ -12,7 +12,7 @@ boot.img 重组工具（Android boot header v2，MTK / oplus ossi 平台专用�
 选项：
   --permissive   在 cmdline 追加 androidboot.selinux=permissive enforcing=0
                  （SuSFS 完整功能需要；不加则保持原厂 enforcing）
-  --no-ksu-cmd   不追加 kernelsu.force_feature
+  --ksu-cmd      强制追加 kernelsu.force_feature=kernel_umount:1（默认不加）
   --keep-avb     保留原 AVB footer 原始字节（默认也会保留尾部，此开关仅显式声明）
 
 输出后校验：python verify_boot.py <输出.img>
@@ -163,7 +163,14 @@ def main():
     add = []
     if '--permissive' in flags:
         add.append('androidboot.selinux=permissive enforcing=0')
-    if '--no-ksu-cmd' not in flags:
+    # NOTE: we deliberately do NOT append kernelsu.force_feature=kernel_umount:1.
+    # kernel_umount rewrites mount state for every appuid transition; on 4.19 the
+    # only substitute for path_umount() is an unconditional unmount, which is not
+    # safe to run on mounts inside a live namespace. Leaving the feature off means
+    # KSU module mounts simply stay visible -- no root, no hiding, no corruption.
+    #
+    # --ksu-cmd forces it back on if a future KSU build implements 4.19 properly.
+    if '--ksu-cmd' in flags:
         add.append('kernelsu.force_feature=kernel_umount:1')
     for a in add:
         if a.split('=')[0] not in cmd:

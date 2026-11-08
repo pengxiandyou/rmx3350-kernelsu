@@ -105,12 +105,24 @@ UMOUNT_NEW = (
     "\terr = path_umount(path, flags);" + NL +
     "#else" + NL +
     "\t/* 4.19 has no path_umount() (introduced in 5.9)." + NL +
-    "\t * kern_unmount() is the 4.19 equivalent: EXPORT_SYMBOL (not GPL) at" + NL +
-    "\t * fs/namespace.c:3321. MNT_DETACH / MNT_FORCE semantics are dropped," + NL +
-    "\t * which is acceptable for KSU module mount points. */" + NL +
+    "\t *" + NL +
+    "\t * Do NOT substitute kern_unmount() here. kern_unmount() is meant for" + NL +
+    "\t * mounts created by kern_mount(): it sets real_mount(mnt)->mnt_ns = NULL" + NL +
+    "\t * and then calls synchronize_rcu() + mntput(). Running that on an" + NL +
+    "\t * arbitrary path inside a live mount namespace detaches the mount from" + NL +
+    "\t * the namespace tree without taking namespace_sem or vfsmount_lock, and" + NL +
+    "\t * leaves any in-flight reference dangling. On MTK this reliably wedges" + NL +
+    "\t * the VFS and takes down whoever touches the fs next (PackageManager" + NL +
+    "\t * first, via Broken pipe on the package service)." + NL +
+    "\t *" + NL +
+    "\t * We only ever get here when ksu_module_mounted is set, which requires a" + NL +
+    "\t * working ksud. Refusing the operation is strictly safer: the mounts stay" + NL +
+    "\t * visible to the target process, i.e. we lose module hiding, and gain a" + NL +
+    "\t * kernel that does not corrupt itself. path_put() releases the reference" + NL +
+    "\t * that try_umount() acquired via kern_path(). */" + NL +
     "\t(void)flags;" + NL +
-    "\tkern_unmount(path->mnt);" + NL +
-    "\terr = 0;" + NL +
+    "\tpath_put(path);" + NL +
+    "\terr = -EOPNOTSUPP;" + NL +
     "#endif" + NL
 )
 
@@ -337,6 +349,54 @@ def patch_anon_security():
                ANON_OLD, ANON_NEW, "anon inode security skip", ANON_MARK)
 
 
+# ============================================ 7. phys_from_virt: pmd_leaf/pud_leaf
+# hook/arm64/patch_memory.c walks init_mm to translate a kernel virtual address
+# to a physical one, then pokes it through FIX_TEXT_POKE0. It guards the
+# huge-page cases with `#if defined(pmd_leaf)` / `#if defined(pud_leaf)`:
+#
+#     pmd = pmd_offset(pud, addr);
+# #if defined(pmd_leaf)
+#     if (pmd_leaf(*pmd)) { ... return __pmd_to_phys(*pmd) + (addr & ~PMD_MASK); }
+# #endif
+#     if (pmd_none(*pmd) || pmd_bad(*pmd)) goto fail;
+#     pte = pte_offset_kernel(pmd, addr);
+#
+# pmd_leaf() and pud_leaf() were introduced in 5.0 (pmd_leaf) / 5.0 (pud_leaf).
+# Linux 4.19's arm64 only has pmd_sect() / pud_sect(). So on 4.19 both #if blocks
+# compile out and a 2 MB or 1 GB block mapping is never recognised as a leaf:
+# the code falls through and dereferences a block descriptor as if it were a
+# page table. For kernel text -- which arm64 maps with 2 MB sections -- that
+# yields either a bogus physical address or a bogus PTE, and whatever comes out
+# gets written through the fixmap into physical memory. That is silent memory
+# corruption, and it happens during kernelsu_init() when the syscall table is
+# patched, i.e. right at boot, before anything else runs.
+#
+# Provide the 4.19 spellings so the existing #if blocks light up.
+PHYS_MARK = "4.19 arm64: *_leaf() is 5.0+, use *_sect()"
+PHYS_ANCHOR = "#include \"asm-generic/fixmap.h\""
+
+PHYS_NEW = (
+    "#include \"asm-generic/fixmap.h\"" + NL +
+    "" + NL +
+    "/* " + PHYS_MARK + ". Without these the huge-page branches in" + NL +
+    " * phys_from_virt() compile out on 4.19 and block mappings are misparsed" + NL +
+    " * as page tables, which corrupts memory when the text is poked. */" + NL +
+    "#ifndef pmd_leaf" + NL +
+    "#define pmd_leaf(pmd) pmd_sect(pmd)" + NL +
+    "#endif" + NL +
+    "#ifndef pud_leaf" + NL +
+    "#define pud_leaf(pud) pud_sect(pud)" + NL +
+    "#endif" + NL +
+    "/* p4d_leaf is deliberately NOT defined: 4.19 has no __p4d_to_phys()/" + NL +
+    " * P4D_MASK, so keeping #if defined(p4d_leaf) false is the correct state. */" + NL
+)
+
+
+def patch_phys_from_virt():
+    return sub(os.path.join(ROOT, "hook", "arm64", "patch_memory.c"),
+               PHYS_ANCHOR, PHYS_NEW, "pmd_leaf/pud_leaf shim", PHYS_MARK)
+
+
 # ============================================================ main
 def main():
     global ROOT
@@ -354,6 +414,7 @@ def main():
     patch_taskhdr()
     patch_selinux_accessors()
     patch_anon_security()
+    patch_phys_from_virt()
     print("=== done ===")
     return 0
 
