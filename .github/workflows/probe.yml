@@ -1,0 +1,30 @@
+name: probe
+on:
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Clone kernel source
+        run: |
+          git clone --depth 1 https://github.com/realme-kernel-opensource/realme_X7max_GTneo_GTneo2T-AndroidT-kernel-source.git kernel
+      - name: Clone vendor source
+        run: |
+          git clone --depth 1 https://github.com/realme-kernel-opensource/realme_X7max_GTneo_GTneo2T-AndroidT-vendor-source.git vendor_repo
+          mv vendor_repo/vendor ./vendor
+      - name: Grep conn_dbg_add_log
+        run: |
+          echo "===== kernel tree ====="
+          grep -rn "conn_dbg_add_log" kernel/ 2>/dev/null | head -40 || echo "(none)"
+          echo "===== vendor tree ====="
+          grep -rn "conn_dbg_add_log" vendor/ 2>/dev/null | head -40 || echo "(none)"
+      - name: Grep EXPORT_SYMBOL_GPL for conn_*
+        run: |
+          echo "===== all EXPORT_SYMBOL mentioning conn ====="
+          grep -rn "EXPORT_SYMBOL.*conn_" kernel/ vendor/ 2>/dev/null | head -40 || echo "(none)"
+      - name: Check connectivity config options
+        run: |
+          echo "===== connectivity Kconfig symbols ====="
+          grep -rn "config MTK_CONN\|config CONNINFRA\|config MTK_CONNINFRA\|CONN_DEBUG\|CONN_DBG" kernel/ vendor/ 2>/dev/null | head -40 || echo "(none)"
+      - name: Done
+        run: echo probe-done
