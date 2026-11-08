@@ -243,17 +243,18 @@ jobs:
             -j"$(nproc)" Image.gz
 
       - name: Report modversions fingerprint (module_layout CRC)
+        continue-on-error: true
         run: |
+          OUT=kernel/out
           echo "=== our module_layout CRC ==="
-          grep -w "module_layout" out/Module.symvers || echo "(not found)"
+          grep -w "module_layout" "$OUT/Module.symvers" || echo "(not found)"
           echo "=== config of interest ==="
-          grep -E "^CONFIG_(MODULE_SIG|MODVERSIONS|KALLSYMS|KPROBES|LIVEPATCH|FTRACE|MODULE_UNLOAD|MODULE_FORCE|JUMP_LABEL|TRACEPOINTS|EVENT_TRACING|FTRACE_MCOUNT)" out/.config || true
+          grep -E "^CONFIG_(MODULE_SIG|MODVERSIONS|KALLSYMS|KPROBES|LIVEPATCH|FTRACE|MODULE_UNLOAD|MODULE_FORCE|JUMP_LABEL|TRACEPOINTS|EVENT_TRACING)" "$OUT/.config" || true
           echo "=== first 15 exported symbols (CRC) ==="
-          head -15 out/Module.symvers
-          mkdir -p out/fp
-          cp out/Module.symvers out/fp/Module.symvers
-          cp out/.config out/fp/config-built.txt
-          cp out/System.map out/fp/System.map 2>/dev/null || true
+          head -15 "$OUT/Module.symvers" || true
+          mkdir -p fp
+          cp "$OUT/Module.symvers" fp/ 2>/dev/null || true
+          cp "$OUT/.config" fp/config-built.txt 2>/dev/null || true
 
       - name: Verify and enforce vermagic (+ suffix, matches F.28 stock)
         run: |
@@ -314,5 +315,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: rmx3350-f28-ksu
-          path: artifacts/
+          path: |
+            artifacts/
+            fp/
           retention-days: 30
