@@ -242,6 +242,19 @@ jobs:
             LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
             -j"$(nproc)" Image.gz
 
+      - name: Report modversions fingerprint (module_layout CRC)
+        run: |
+          echo "=== our module_layout CRC ==="
+          grep -w "module_layout" out/Module.symvers || echo "(not found)"
+          echo "=== config of interest ==="
+          grep -E "^CONFIG_(MODULE_SIG|MODVERSIONS|KALLSYMS|KPROBES|LIVEPATCH|FTRACE|MODULE_UNLOAD|MODULE_FORCE|JUMP_LABEL|TRACEPOINTS|EVENT_TRACING|FTRACE_MCOUNT)" out/.config || true
+          echo "=== first 15 exported symbols (CRC) ==="
+          head -15 out/Module.symvers
+          mkdir -p out/fp
+          cp out/Module.symvers out/fp/Module.symvers
+          cp out/.config out/fp/config-built.txt
+          cp out/System.map out/fp/System.map 2>/dev/null || true
+
       - name: Verify and enforce vermagic (+ suffix, matches F.28 stock)
         run: |
           cd kernel
