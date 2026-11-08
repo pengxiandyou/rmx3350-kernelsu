@@ -19,7 +19,12 @@ ld.lld failed on vmlinux:
 Mapping to Linux 4.19 (verified against realme AndroidT 4.19.191 source):
   path_umount                 -> kern_unmount()          (5.9 added path_umount; 4.19 has EXPORT_SYMBOL(kern_unmount) at fs/namespace.c:3321)
   path_mount                  -> no-op                   (4.19 do_mount() 2nd arg is __user path string; do_change_type() is static)
-  strncpy_from_user_nofault   -> strncpy_from_unsafe()   (5.8 unified renames; 4.19 strncpy_from_unsafe uses probe_kernel_read -> __copy_from_user_inatomic)
+  strncpy_from_user_nofault   -> strncpy_from_unsafe_user()
+       4.19 里 strncpy_from_unsafe() 是给内核地址用的，内部 set_fs(KERNEL_DS)，
+       读用户态 argv 指针会失败（实测 dmesg: 'check_argv failed'）。
+       对应 5.8 的 strncpy_from_user_nofault 的，是 4.19 的
+       strncpy_from_unsafe_user(char *dst, const void __user *src, long count)，
+       见 include/linux/uaccess.h:281。
   copy_from_user_nofault      -> __copy_from_user_inatomic()
   copy_to_user_nofault        -> __copy_to_user_inatomic()
   copy_to_kernel_nofault      -> probe_kernel_write()
@@ -201,7 +206,7 @@ def patch_uaccess():
     History: pkg_observer(TWA_RESUME) and scp.h both had to be redone as
     whole-tree/whole-directory sweeps after single-file fixes missed copies."""
     rules = [
-        ("strncpy_from_user_nofault(", "strncpy_from_unsafe("),
+        ("strncpy_from_user_nofault(", "strncpy_from_unsafe_user("),
         ("copy_from_user_nofault(", "__copy_from_user_inatomic("),
         ("copy_to_user_nofault(", "__copy_to_user_inatomic("),
         ("copy_to_kernel_nofault(", "probe_kernel_write("),
