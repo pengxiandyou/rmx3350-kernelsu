@@ -546,6 +546,44 @@ def patch_dispatch_includes():
     p.write_text(cur.replace(old, new, 1), encoding="utf-8")
     print("  [OK]   dispatch.c: 补 init_task.h + sched/signal.h")
 
+BOOT_EVENT_MARK = "4.19: 内联触发一次 track_throne"
+
+
+def patch_boot_event():
+    """boot_event.c: zygote 起来后主动扫一次管理器。
+
+    实测（v5 内核）`observer init done` / `watching /data/system` 都打出来了，
+    但之后 `pm install` 改了 packages.list，内核侧一条事件都没收到，
+    说明 4.19 的父子目录 fsnotify 传递在这台机器上不生效。
+    于是 track_throne(false) 永远不会被调用，管理器永远 crown 不上。
+    这里在 on_post_fs_data 里显式扫一次。
+    """
+    p = TARGET.parent.parent / "runtime" / "boot_event.c"
+    if not p.exists():
+        print("  [SKIP] missing file: runtime/boot_event.c")
+        return
+    cur = p.read_text(encoding="utf-8")
+    if BOOT_EVENT_MARK in cur:
+        print("  [INFO] boot_event.c 已处理")
+        return
+    old = "    ksu_observer_init();"
+    new = ("    ksu_observer_init();" + NL +
+           "    /* " + BOOT_EVENT_MARK + "：fsnotify 在本机上收不到" + NL +
+           "     * /data/system/packages.list 的 rename 事件，管理器永远 crown" + NL +
+           "     * 不上，所以 zygote 起来后主动扫一次。 */" + NL +
+           "    track_throne(false);")
+    if old not in cur:
+        print("  [WARN] boot_event.c: ksu_observer_init() 片段未命中")
+        return
+    cur = cur.replace(old, new, 1)
+    n = cur.count("track_throne(true);")
+    if n:
+        cur = cur.replace("track_throne(true);", "track_throne(false);")
+    p.write_text(cur, encoding="utf-8")
+    print("  [OK]   boot_event.c: on_post_fs_data 内联 track_throne(false)"
+          + (f"，另外 {n} 处 true->false" if n else ""))
+
+
 def main():
     # 注意：这几个文件各自独立，缺任何一个都不应中断其余补丁。
     # 早期版本在这里 return 1，导致只下载 pkg_observer.c 时
@@ -555,6 +593,7 @@ def main():
     patch_seccomp()
     patch_mountns()
     patch_pkgobs()
+    patch_boot_event()
     patch_appprofile()
     patch_selinux_419()
     patch_dispatch_includes()
