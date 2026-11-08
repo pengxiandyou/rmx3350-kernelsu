@@ -186,6 +186,29 @@ jobs:
           echo "--- confirm ---"
           grep -n "KSU_TEST_IGNORE_CRC_419" -A4 -B2 kernel/kernel/module.c
 
+      - name: Stub conn_dbg_add_log (OPPO private export, absent from public tree)
+        run: |
+          cat > kernel/kernel/conn_dbg_stub.c <<'EOF'
+          // OPPO/MTK 私有日志接口，公开源码树里没有定义。
+          // conninfra.ko 依赖它，缺失会导致：
+          //   conninfra: Unknown symbol conn_dbg_add_log (err -2)
+          //   insmod: failed to load conninfra.ko: No such file or directory
+          // 这里提供一个空实现：只丢弃日志，不影响连接子系统的功能。
+          #include <linux/kernel.h>
+          #include <linux/export.h>
+
+          int conn_dbg_add_log(const char *fmt, ...)
+          {
+          	return 0;
+          }
+          EXPORT_SYMBOL(conn_dbg_add_log);
+          EOF
+          grep -q conn_dbg_stub kernel/kernel/Makefile || echo 'obj-y += conn_dbg_stub.o' >> kernel/kernel/Makefile
+          echo "--- kernel/kernel/conn_dbg_stub.c ---"
+          cat kernel/kernel/conn_dbg_stub.c
+          echo "--- Makefile tail ---"
+          tail -3 kernel/kernel/Makefile
+
       - name: Install build dependencies
         run: |
           sudo apt-get update -y
